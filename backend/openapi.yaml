@@ -1,0 +1,181 @@
+openapi: 3.0.3
+info:
+  title: Proof-of-Presence API
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:5000
+
+components:
+  securitySchemes:
+    DevUserId:
+      type: apiKey
+      in: header
+      name: X-User-Id
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        detail: { type: string }
+
+    AttemptRequest:
+      type: object
+      required: [pi_id]
+      properties:
+        pi_id: { type: string, example: "0000000000000001" }
+
+    AttemptResponse:
+      type: object
+      required: [attempt_id, attempt_token]
+      properties:
+        attempt_id: { type: string }
+        attempt_token: { type: string }
+
+    SessionRequest:
+      type: object
+      required: [pi_id, attempt_id]
+      properties:
+        pi_id: { type: string, example: "0000000000000001" }
+        attempt_id: { type: string }
+
+    SessionResponse:
+      type: object
+      required: [sid, tokenB]
+      properties:
+        sid: { type: string }
+        tokenB: { type: string }
+
+    AttestRequest:
+      type: object
+      required: [tokenB, attPi]
+      properties:
+        tokenB: { type: string }
+        attPi: { type: string }
+
+    AttestResponse:
+      type: object
+      required: [proof_id, result]
+      properties:
+        proof_id: { type: string }
+        result: { type: string, example: "ok" }
+
+    ProofResponse:
+      type: object
+      required: [proof_id, user_id, pi_id, attempt_id, sid, result, created_at]
+      properties:
+        proof_id: { type: string }
+        user_id: { type: string }
+        pi_id: { type: string }
+        attempt_id: { type: string }
+        sid: { type: string }
+        result: { type: string }
+        success_count: { type: integer, nullable: true }
+        timing_summary: { type: object, nullable: true }
+        transcript_hash: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+paths:
+  /presence/attempt:
+    post:
+      summary: Create a presence attempt (phone)
+      security:
+        - DevUserId: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttemptRequest" }
+      responses:
+        "200":
+          description: Attempt created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptResponse" }
+        "400":
+          description: Bad request
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Pi not found or not active
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /presence/session:
+    post:
+      summary: Create a presence session (Pi)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionRequest" }
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "404":
+          description: Attempt or Pi not found
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409":
+          description: Conflict (expired/consumed/mismatch)
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /presence/attest:
+    post:
+      summary: Submit Pi attestation (Pi)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttestRequest" }
+      responses:
+        "200":
+          description: Proof created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttestResponse" }
+        "401":
+          description: Invalid token/signature
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Session/attempt not found
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409":
+          description: Expired/used/mismatch
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /presence/proof/{proof_id}:
+    get:
+      summary: Read proof (phone)
+      security:
+        - DevUserId: []
+      parameters:
+        - in: path
+          name: proof_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Proof
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProofResponse" }
+        "401":
+          description: Missing X-User-Id
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Forbidden (wrong user)
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Not found
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
