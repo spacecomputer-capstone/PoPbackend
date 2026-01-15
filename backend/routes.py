@@ -294,3 +294,7 @@ def get_proof(proof_id: str):
         "transcript_hash": proof.transcript_hash,
         "created_at": proof.created_at.isoformat() if proof.created_at else None,
     }), 200
+
+@presence_bp.route("/presence/<path:_any>", methods=["OPTIONS"])
+def presence_preflight(_any):
+    return ("", 204)

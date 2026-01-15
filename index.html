@@ -1,0 +1,376 @@
+<!-- Very basic frontend for quick test the rpi should be working with updated packages and servers -->
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PoP Laptop Tester (Backend + BLE)</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; margin: 18px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; }
+    label { display:block; font-size:12px; color:#444; margin-bottom:6px; }
+    input { width: 360px; max-width: 92vw; padding:10px; border:1px solid #ccc; border-radius:10px; }
+    button { padding:10px 14px; border:0; border-radius:10px; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .card { border:1px solid #eee; border-radius:14px; padding:14px; margin-top:12px; }
+    pre { background:#0b1020; color:#d6ddff; padding:12px; border-radius:12px; overflow:auto; max-height: 380px; }
+    .muted { color:#666; font-size:12px; }
+    hr { border:none; border-top:1px solid #eee; margin:14px 0; }
+  </style>
+</head>
+<body>
+  <h2>Proof-of-Presence Laptop Tester (Web Bluetooth)</h2>
+  <p class="muted">
+    Flow: POST /presence/attempt → BLE write attempt_token → wait RESULT notify → GET /presence/proof/{proof_id}
+  </p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Backend base URL</label>
+        <input id="baseUrl" value="http://172.20.10.7:5001" />
+      </div>
+      <div>
+        <label>X-User-Id</label>
+        <input id="userId" value="1" />
+      </div>
+      <div>
+        <label>pi_id</label>
+        <input id="piId" value="0000000000000001" />
+      </div>
+    </div>
+
+    <hr />
+
+    <div class="row">
+      <div>
+        <label>BLE Service UUID</label>
+        <input id="svcUuid" value="eb5c86a4-733c-4d9d-aab2-285c2dab09a1" />
+      </div>
+      <div>
+        <label>Attempt Token Char UUID</label>
+        <input id="attemptUuid" value="8c0b8f3e-1b7a-4e58-9b9e-6fbb4e3d2b01" />
+      </div>
+      <div>
+        <label>Result Char UUID</label>
+        <input id="resultUuid" value="8c0b8f3e-1b7a-4e58-9b9e-6fbb4e3d2b02" />
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnAttempt">1) Create Attempt</button>
+      <button id="btnConnect" disabled>2) Connect BLE</button>
+      <button id="btnSend" disabled>3) Send Token + Wait Result</button>
+      <button id="btnFull" style="background:#ffd24d;">Run Full Flow</button>
+      <button id="btnDisconnect">Disconnect</button>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <div style="flex:1; min-width: 360px;">
+        <label>Attempt token (auto-filled)</label>
+        <input id="attemptToken" placeholder="(create attempt first)" />
+      </div>
+      <div style="flex:1; min-width: 360px;">
+        <label>Last proof_id (auto-filled)</label>
+        <input id="proofId" placeholder="(result will fill this)" />
+      </div>
+      <div style="flex:1; min-width: 360px;">
+        <label>Fetch proof</label>
+        <button id="btnProof" disabled>GET /presence/proof/{proof_id}</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <strong>Logs</strong>
+      <button id="btnClear" style="background:#eee;">Clear</button>
+    </div>
+    <pre id="log"></pre>
+  </div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  const enc = new TextEncoder();
+  const dec = new TextDecoder("utf-8", { fatal: false });
+
+  const state = {
+    device: null,
+    server: null,
+    attemptChar: null,
+    resultChar: null,
+    token: null,
+    resultBuf: new Uint8Array(0),
+  };
+
+  function log(msg) {
+    const line = `[${new Date().toISOString()}] ${msg}`;
+    console.log(line);
+    logEl.textContent += line + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function getCfg() {
+    return {
+      baseUrl: $("baseUrl").value.trim(),
+      userId: $("userId").value.trim(),
+      piId: $("piId").value.trim(),
+      svcUuid: $("svcUuid").value.trim().toLowerCase(),
+      attemptUuid: $("attemptUuid").value.trim().toLowerCase(),
+      resultUuid: $("resultUuid").value.trim().toLowerCase(),
+    };
+  }
+
+  // --- Backend ---
+  async function createAttempt() {
+    const { baseUrl, userId, piId } = getCfg();
+    const url = `${baseUrl}/presence/attempt`;
+    log(`POST ${url}`);
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "Content-Type": "application/json",
+        "X-User-Id": userId,
+      },
+      body: JSON.stringify({ pi_id: piId }),
+    });
+
+    const text = await resp.text();
+    log(`Attempt status=${resp.status}`);
+    if (!resp.ok) throw new Error(`Attempt failed ${resp.status}: ${text}`);
+
+    const data = JSON.parse(text);
+    if (!data.attempt_token) throw new Error("No attempt_token in response");
+
+    $("attemptToken").value = data.attempt_token;
+    state.token = data.attempt_token;
+
+    $("btnConnect").disabled = false;
+    log(`Attempt OK: attempt_id=${data.attempt_id ?? "(none)"} token_bytes=${enc.encode(state.token).length}`);
+    return data;
+  }
+
+  // --- BLE ---
+  async function connectBle() {
+    const { svcUuid, attemptUuid, resultUuid } = getCfg();
+    log(`Requesting BLE device advertising service ${svcUuid}...`);
+
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [svcUuid] }],
+    });
+
+    device.addEventListener("gattserverdisconnected", () => {
+      log("BLE disconnected");
+      state.device = null;
+      state.server = null;
+      state.attemptChar = null;
+      state.resultChar = null;
+      $("btnSend").disabled = true;
+    });
+
+    log(`Connecting to ${device.name || "(no name)"} (${device.id})...`);
+    const server = await device.gatt.connect();
+
+    const service = await server.getPrimaryService(svcUuid);
+    const attemptChar = await service.getCharacteristic(attemptUuid);
+    const resultChar = await service.getCharacteristic(resultUuid);
+
+    state.device = device;
+    state.server = server;
+    state.attemptChar = attemptChar;
+    state.resultChar = resultChar;
+
+    $("btnSend").disabled = false;
+    log("BLE connected + characteristics ready");
+  }
+
+  function appendBuf(a, b) {
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a, 0);
+    out.set(b, a.length);
+    return out;
+  }
+
+  function tryParseResultFromBuffer() {
+    try {
+      const txt = dec.decode(state.resultBuf);
+      return JSON.parse(txt);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function waitForResultNotify(timeoutMs = 25000) {
+    if (!state.resultChar) throw new Error("Not connected (resultChar missing)");
+    state.resultBuf = new Uint8Array(0);
+
+    return new Promise(async (resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for RESULT after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      function onNotif(event) {
+        const dv = event.target.value; // DataView
+        const chunk = new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength));
+        state.resultBuf = appendBuf(state.resultBuf, chunk);
+
+        if (state.resultBuf.length > 64 * 1024) {
+          cleanup();
+          reject(new Error("RESULT buffer too large (bad framing?)"));
+          return;
+        }
+
+        const parsed = tryParseResultFromBuffer();
+        if (parsed) {
+          cleanup();
+          resolve(parsed);
+        }
+      }
+
+      function cleanup() {
+        clearTimeout(timer);
+        state.resultChar.removeEventListener("characteristicvaluechanged", onNotif);
+      }
+
+      state.resultChar.addEventListener("characteristicvaluechanged", onNotif);
+      await state.resultChar.startNotifications();
+      log("RESULT notifications started; waiting...");
+    });
+  }
+
+  async function writeAttemptTokenChunked(token, chunkSize = 180) {
+    if (!state.attemptChar) throw new Error("Not connected (attemptChar missing)");
+    const tokenBytes = enc.encode(token);
+    const header = enc.encode(`LEN:${tokenBytes.length}\n`);
+
+    log("Writing LEN header...");
+    await state.attemptChar.writeValue(header);
+
+    log(`Writing token chunks (${chunkSize} bytes)... total=${tokenBytes.length}`);
+    let offset = 0;
+    while (offset < tokenBytes.length) {
+      const end = Math.min(offset + chunkSize, tokenBytes.length);
+      const chunk = tokenBytes.slice(offset, end);
+
+      if (state.attemptChar.writeValueWithoutResponse) {
+        await state.attemptChar.writeValueWithoutResponse(chunk);
+      } else {
+        await state.attemptChar.writeValue(chunk);
+      }
+
+      offset = end;
+      log(`Token progress ${offset}/${tokenBytes.length}`);
+    }
+    log("Token write complete");
+  }
+
+  async function sendTokenAndWaitResult() {
+    const token = $("attemptToken").value.trim();
+    if (!token) throw new Error("No attempt token. Click 'Create Attempt' first.");
+
+    await writeAttemptTokenChunked(token, 180);
+    const result = await waitForResultNotify(25000);
+
+    log(`RESULT parsed: ${JSON.stringify(result)}`);
+    if (result && result.proof_id) {
+      $("proofId").value = result.proof_id;
+      $("btnProof").disabled = false;
+    }
+    return result;
+  }
+
+  async function fetchProof() {
+    const { baseUrl, userId } = getCfg();
+    const proofId = $("proofId").value.trim();
+    if (!proofId) throw new Error("No proof_id to fetch");
+
+    const url = `${baseUrl}/presence/proof/${encodeURIComponent(proofId)}`;
+    log(`GET ${url}`);
+
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        "accept": "application/json",
+        "X-User-Id": userId,
+      },
+    });
+
+    const text = await resp.text();
+    log(`Proof status=${resp.status}`);
+    if (!resp.ok) throw new Error(`Proof failed ${resp.status}: ${text}`);
+
+    const data = JSON.parse(text);
+    log(`PROOF: ${JSON.stringify(data)}`);
+    return data;
+  }
+
+  async function disconnect() {
+    try {
+      if (state.device?.gatt?.connected) {
+        log("Disconnecting BLE...");
+        state.device.gatt.disconnect();
+      } else {
+        log("No BLE connection to disconnect");
+      }
+    } catch (e) {
+      log(`Disconnect error: ${e.message || e}`);
+    }
+  }
+
+  // --- UI wires ---
+  $("btnClear").onclick = () => (logEl.textContent = "");
+
+  $("btnAttempt").onclick = async () => {
+    try { await createAttempt(); }
+    catch (e) {
+      log(`ERROR: ${e.message || e}`);
+      log("If this is a CORS error, enable CORS for http://localhost:8000 (or use a local proxy).");
+    }
+  };
+
+  $("btnConnect").onclick = async () => {
+    try { await connectBle(); }
+    catch (e) { log(`ERROR: ${e.message || e}`); }
+  };
+
+  $("btnSend").onclick = async () => {
+    try { await sendTokenAndWaitResult(); }
+    catch (e) { log(`ERROR: ${e.message || e}`); }
+  };
+
+  $("btnProof").onclick = async () => {
+    try { await fetchProof(); }
+    catch (e) { log(`ERROR: ${e.message || e}`); }
+  };
+
+  $("btnFull").onclick = async () => {
+    try {
+      await createAttempt();
+      if (!state.server) await connectBle();
+      const result = await sendTokenAndWaitResult();
+      if (result?.ok && result?.proof_id) await fetchProof();
+    } catch (e) {
+      log(`ERROR: ${e.message || e}`);
+      log("If it fails right away on the POST, it's probably CORS.");
+    }
+  };
+
+  $("btnDisconnect").onclick = disconnect;
+
+  // Web Bluetooth availability check
+  if (!navigator.bluetooth) {
+    log("Web Bluetooth NOT available in this browser. Use Chrome/Edge and serve from localhost.");
+    $("btnConnect").disabled = true;
+    $("btnSend").disabled = true;
+    $("btnFull").disabled = true;
+  }
+})();
+</script>
+</body>
+</html>

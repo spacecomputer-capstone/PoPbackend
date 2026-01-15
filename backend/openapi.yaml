@@ -3,7 +3,7 @@ info:
   title: Proof-of-Presence API
   version: 0.1.0
 servers:
-  - url: http://127.0.0.1:5000
+  - url: http://172.20.10.7:5001
 
 components:
   securitySchemes:
