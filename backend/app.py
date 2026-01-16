@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS
 
-from backend.extensions import db
+from .extensions import db
 
 
 def register_swagger(app: Flask):
