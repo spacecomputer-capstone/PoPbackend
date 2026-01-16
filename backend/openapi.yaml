@@ -3,7 +3,10 @@ info:
   title: Proof-of-Presence API
   version: 0.1.0
 servers:
+  - url: https://popbackend-aevb.onrender.com
+    description: Production (Render)
   - url: http://172.20.10.7:5001
+    description: Local development
 
 components:
   securitySchemes:
