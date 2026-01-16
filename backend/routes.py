@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from nacl.signing import SigningKey, VerifyKey
 
-from backend.extensions import db
-from backend.models import Pi, PresenceAttempt, PresenceSession, PresenceProof
-from backend.crypto_utils import sign_ed25519, sha256_hex, verify_ed25519_compact
+from .extensions import db
+from .models import Pi, PresenceAttempt, PresenceSession, PresenceProof
+from .crypto_utils import sign_ed25519, sha256_hex, verify_ed25519_compact
 
 presence_bp = Blueprint("presence", __name__)
 
