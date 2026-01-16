@@ -57,7 +57,7 @@ def create_app():
             resp.headers["Access-Control-Allow-Private-Network"] = "true"
         return resp
 
-    from backend.routes import presence_bp
+    from routes import presence_bp
     app.register_blueprint(presence_bp)
 
     @app.get("/health")
