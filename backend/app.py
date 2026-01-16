@@ -39,6 +39,7 @@ def create_app():
         resources={r"/presence/*": {"origins": [
             "http://localhost:8000",
             "http://127.0.0.1:8000",
+            "https://popbackend-aevb.onrender.com",
         ]}},
         allow_headers=["Content-Type", "Accept", "X-User-Id"],
         methods=["GET", "POST", "OPTIONS"],
@@ -53,6 +54,7 @@ def create_app():
             "http://127.0.0.1:8000",
             "http://localhost:9001",
             "http://127.0.0.1:9001",
+            "https://popbackend-aevb.onrender.com",
         }:
             resp.headers["Access-Control-Allow-Private-Network"] = "true"
         return resp
